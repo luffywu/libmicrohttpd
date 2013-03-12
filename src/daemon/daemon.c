@@ -2670,16 +2670,27 @@ MHD_quiesce_daemon (struct MHD_Daemon *daemon)
    */
   fd = daemon->socket_fd;
   daemon->socket_fd = create_socket (PF_INET, SOCK_STREAM, 0);
-  close(fd);
   if (NULL != daemon->worker_pool)
     {
       /* MHD_USE_NO_LISTEN_SOCKET disables thread pools, hence we need to check */
       for (i = 0; i < daemon->worker_pool_size; ++i)
         {
-          fd = daemon->worker_pool[i].socket_fd;
-          daemon->worker_pool[i].socket_fd = create_socket (PF_INET, SOCK_STREAM, 0);
+          daemon->worker_pool[i].socket_fd = daemon->socket_fd;
         }
     }
+
+  if (-1 != daemon->wpipe[1])
+    {
+      if (1 != WRITE (daemon->wpipe[1], "e", 1))
+        MHD_PANIC ("failed to signal shutdownn via pipe");
+    }
+#ifdef HAVE_LISTEN_SHUTDOWN
+  else
+    {
+      /* fd must not be -1 here, otherwise we'd have used the wpipe */
+      SHUTDOWN (fd, SHUT_RDWR);
+    }
+#endif
 }
 
 
