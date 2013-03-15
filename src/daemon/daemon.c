@@ -2670,6 +2670,7 @@ MHD_quiesce_daemon (struct MHD_Daemon *daemon)
    */
   fd = daemon->socket_fd;
   daemon->socket_fd = create_socket (PF_INET, SOCK_STREAM, 0);
+  LISTEN (daemon->socket_fd, 20);
   if (NULL != daemon->worker_pool)
     {
       /* MHD_USE_NO_LISTEN_SOCKET disables thread pools, hence we need to check */
@@ -2687,6 +2688,7 @@ MHD_quiesce_daemon (struct MHD_Daemon *daemon)
 #ifdef HAVE_LISTEN_SHUTDOWN
   else
     {
+      #error "HAVE_LISTEN_SHUTDOWN breaks rolling deploys, since shutdown() affects forks"a
       /* fd must not be -1 here, otherwise we'd have used the wpipe */
       SHUTDOWN (fd, SHUT_RDWR);
     }
