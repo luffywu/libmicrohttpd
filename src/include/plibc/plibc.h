@@ -553,11 +553,7 @@ char *strcasestr(const char *haystack_start, const char *needle_start);
  #define CHMOD(f, p) chmod(f, p)
  #define FSTAT(h, b) fstat(h, b)
  #define PLIBC_KILL(p, s) kill(p, s)
-#ifdef __linux__
- #define PIPE(h) pipe2(h, O_CLOEXEC)
-#else
  #define PIPE(h) pipe(h)
-#endif
  #define REMOVE(p) remove(p)
  #define RENAME(o, n) rename(o, n)
  #define STAT(p, b) stat(p, b)
