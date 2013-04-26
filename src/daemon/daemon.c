@@ -1350,7 +1350,6 @@ MHD_select (struct MHD_Daemon *daemon,
   struct timeval *tv;
   MHD_UNSIGNED_LONG_LONG ltimeout;
   int ds;
-  int tmp;
 
   timeout.tv_sec = 0;
   timeout.tv_usec = 0;
@@ -1417,12 +1416,6 @@ MHD_select (struct MHD_Daemon *daemon,
 #endif
       return MHD_NO;
     }
-
-  /* drain signaling pipe to avoid spinning select */
-  if ( (-1 != daemon->wpipe[0]) &&
-       (FD_ISSET(daemon->wpipe[0], &rs)) )
-    read(daemon->wpipe[0], &tmp, sizeof(tmp));
-
   /* select connection thread handling type */
   if ( (-1 != (ds = daemon->socket_fd)) &&
        (FD_ISSET (ds, &rs)) )
