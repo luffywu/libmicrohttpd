@@ -21,14 +21,14 @@
 #
 #
 AC_PREREQ(2.57)
-AC_INIT([libmicrohttpd], [0.9.25],[libmicrohttpd@gnu.org])
+AC_INIT([libmicrohttpd], [0.9.26],[libmicrohttpd@gnu.org])
 AM_INIT_AUTOMAKE([silent-rules])
 AC_CONFIG_HEADERS([MHD_config.h])
 AC_CONFIG_MACRO_DIR([m4])
 AH_TOP([#define _GNU_SOURCE  1])
 
 LIB_VERSION_CURRENT=26
-LIB_VERSION_REVISION=3
+LIB_VERSION_REVISION=4
 LIB_VERSION_AGE=16
 AC_SUBST(LIB_VERSION_CURRENT)
 AC_SUBST(LIB_VERSION_REVISION)
@@ -255,6 +255,14 @@ then
   AC_DEFINE_UNQUOTED([MHD_REQ_CURL_GNUTLS_VERSION], "$MHD_REQ_CURL_GNUTLS_VERSION", [gnuTLS lib version - used in conjunction with cURL])
   AC_DEFINE_UNQUOTED([MHD_REQ_CURL_NSS_VERSION], "$MHD_REQ_CURL_NSS_VERSION", [NSS lib version - used in conjunction with cURL])
 fi
+
+AC_MSG_CHECKING(for magic_open -lmagic)
+AC_CHECK_LIB(magic, magic_open,
+  [AC_CHECK_HEADERS([magic.h],
+   AM_CONDITIONAL(HAVE_MAGIC, true),
+   AM_CONDITIONAL(HAVE_MAGIC, false))],
+  AM_CONDITIONAL(HAVE_MAGIC, false))
+
 LIBS=$SAVE_LIBS
 AM_CONDITIONAL(HAVE_CURL, test x$curl = x1)
 
@@ -436,6 +444,7 @@ libmicrohttpd.pc
 Makefile
 contrib/Makefile
 doc/Makefile
+doc/examples/Makefile
 m4/Makefile
 src/Makefile
 src/include/Makefile

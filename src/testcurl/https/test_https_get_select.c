@@ -151,7 +151,6 @@ testExternalGet ()
       FD_ZERO (&rs);
       FD_ZERO (&ws);
       FD_ZERO (&es);
-      curl_multi_perform (multi, &running);
       mret = curl_multi_fdset (multi, &rs, &ws, &es, &max);
       if (mret != CURLM_OK)
         {

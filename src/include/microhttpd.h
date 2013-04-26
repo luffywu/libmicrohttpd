@@ -106,7 +106,7 @@ extern "C"
 /**
  * Current version of the library.
  */
-#define MHD_VERSION 0x00091900
+#define MHD_VERSION 0x00092001
 
 /**
  * MHD-internal return code for "YES".
@@ -420,8 +420,11 @@ enum MHD_OPTION
   MHD_OPTION_END = 0,
 
   /**
-   * Maximum memory size per connection (followed by a
-   * size_t).
+   * Maximum memory size per connection (followed by a size_t).
+   * Default is 32 kb (MHD_POOL_SIZE_DEFAULT).
+   * Values above 128k are unlikely to result in much benefit, as half
+   * of the memory will be typically used for IO, and TCP buffers are
+   * unlikely to support window sizes above 64k on most systems.
    */
   MHD_OPTION_CONNECTION_MEMORY_LIMIT = 1,
 
@@ -934,7 +937,7 @@ typedef int
  */
 typedef void
   (*MHD_RequestCompletedCallback) (void *cls,
-                                   struct MHD_Connection * connection,
+                                   struct MHD_Connection *connection,
                                    void **con_cls,
                                    enum MHD_RequestTerminationCode toe);
 
@@ -1099,6 +1102,23 @@ MHD_start_daemon (unsigned int flags,
 
 
 /**
+ * Stop accepting connections from the listening socket.  Allows
+ * clients to continue processing, but stops accepting new
+ * connections.  Note that the caller is responsible for closing the
+ * returned socket; however, if MHD is run using threads (anything but
+ * external select mode), it must not be closed until AFTER
+ * "MHD_stop_daemon" has been called (as it is theoretically possible
+ * that an existing thread is still using it).
+ *
+ * @param daemon daemon to stop accepting new connections for
+ * @return old listen socket on success, -1 if the daemon was 
+ *         already not listening anymore
+ */
+int
+MHD_quiesce_daemon (struct MHD_Daemon *daemon);
+
+
+/**
  * Shutdown an http daemon.
  *
  * @param daemon daemon to stop
@@ -1179,6 +1199,14 @@ int MHD_get_timeout (struct MHD_Daemon *daemon,
  * by clients in combination with MHD_get_fdset
  * if the client-controlled select method is used.
  *
+ * This function is a convenience method, which is useful if the
+ * fd_sets from "MHD_get_fdset" were not directly passed to 'select';
+ * with this function, MHD will internally do the appropriate 'select'
+ * call itself again.  While it is always safe to call 'MHD_run' (in
+ * external select mode), you should call 'MHD_run_from_select' if
+ * performance is important (as it saves an expensive call to
+ * 'select').
+ *
  * @param daemon daemon to run
  * @return MHD_YES on success, MHD_NO if this
  *         daemon was not started with the right
@@ -1186,6 +1214,31 @@ int MHD_get_timeout (struct MHD_Daemon *daemon,
  */
 int 
 MHD_run (struct MHD_Daemon *daemon);
+
+
+/**
+ * Run webserver operations. This method should be called by clients
+ * in combination with MHD_get_fdset if the client-controlled select
+ * method is used.
+ *
+ * You can use this function instead of "MHD_run" if you called
+ * 'select' on the result from "MHD_get_fdset".  File descriptors in
+ * the sets that are not controlled by MHD will be ignored.  Calling
+ * this function instead of "MHD_run" is more efficient as MHD will
+ * not have to call 'select' again to determine which operations are
+ * ready.
+ *
+ * @param daemon daemon to run select loop for
+ * @param read_fd_set read set
+ * @param write_fd_set write set
+ * @param except_fd_set except set (not used, can be NULL)
+ * @return MHD_NO on serious errors, MHD_YES on success
+ */
+int
+MHD_run_from_select (struct MHD_Daemon *daemon, 
+		     const fd_set *read_fd_set,
+		     const fd_set *write_fd_set,
+		     const fd_set *except_fd_set);
 
 
 /* **************** Connection handling functions ***************** */
@@ -1645,7 +1698,8 @@ const char *MHD_get_response_header (struct MHD_Response *response,
  *        internal buffering (used only for the parsing,
  *        specifically the parsing of the keys).  A
  *        tiny value (256-1024) should be sufficient.
- *        Do NOT use a value smaller than 256.
+ *        Do NOT use a value smaller than 256.  For good
+ *        performance, use 32 or 64k (i.e. 65536).
  * @param iter iterator to be called with the parsed data,
  *        Must NOT be NULL.
  * @param cls first argument to ikvi

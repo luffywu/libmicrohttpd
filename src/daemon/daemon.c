@@ -660,7 +660,7 @@ MHD_handle_connection (void *data)
 #ifdef HAVE_POLL_H
       else
 	{
-	    /* use poll */
+	  /* use poll */
 	  memset(&mp, 0, sizeof (struct MHD_Pollfd));
 	  MHD_connection_get_pollfd(con, &mp);
 	  memset(&p, 0, sizeof (p));
@@ -1137,11 +1137,14 @@ MHD_accept_connection (struct MHD_Daemon *daemon)
   int s;
   int flags;
   int need_fcntl;
+  int fd;
 
   addrlen = sizeof (addrstorage);
   memset (addr, 0, sizeof (addrstorage));
+  if (-1 == (fd = daemon->socket_fd))
+    return MHD_NO;
 #if HAVE_ACCEPT4
-  s = accept4 (daemon->socket_fd, addr, &addrlen, SOCK_CLOEXEC);
+  s = accept4 (fd, addr, &addrlen, SOCK_CLOEXEC);
   need_fcntl = MHD_NO;
 #else
   s = -1;
@@ -1149,7 +1152,7 @@ MHD_accept_connection (struct MHD_Daemon *daemon)
 #endif
   if (-1 == s)
   {
-    s = ACCEPT (daemon->socket_fd, addr, &addrlen);
+    s = ACCEPT (fd, addr, &addrlen);
     need_fcntl = MHD_YES;
   }
   if ((-1 == s) || (addrlen <= 0))
@@ -1329,7 +1332,72 @@ MHD_get_timeout (struct MHD_Daemon *daemon,
 
 
 /**
- * Main select call.
+ * Run webserver operations. This method should be called by clients
+ * in combination with MHD_get_fdset if the client-controlled select
+ * method is used.
+ *
+ * You can use this function instead of "MHD_run" if you called
+ * 'select' on the result from "MHD_get_fdset".  File descriptors in
+ * the sets that are not controlled by MHD will be ignored.  Calling
+ * this function instead of "MHD_run" is more efficient as MHD will
+ * not have to call 'select' again to determine which operations are
+ * ready.
+ *
+ * @param daemon daemon to run select loop for
+ * @param read_fd_set read set
+ * @param write_fd_set write set
+ * @param except_fd_set except set (not used, can be NULL)
+ * @return MHD_NO on serious errors, MHD_YES on success
+ */
+int
+MHD_run_from_select (struct MHD_Daemon *daemon, 
+		     const fd_set *read_fd_set,
+		     const fd_set *write_fd_set,
+		     const fd_set *except_fd_set)
+{
+  int ds;
+  int tmp;
+  struct MHD_Connection *pos;
+  struct MHD_Connection *next;
+
+  /* select connection thread handling type */
+  if ( (-1 != (ds = daemon->socket_fd)) &&
+       (FD_ISSET (ds, read_fd_set)) )
+    MHD_accept_connection (daemon);
+  /* drain signaling pipe to avoid spinning select */
+  if ( (-1 != daemon->wpipe[0]) &&
+       (FD_ISSET (daemon->wpipe[0], read_fd_set)) )
+    (void) read (daemon->wpipe[0], &tmp, sizeof (tmp));
+
+  if (0 == (daemon->options & MHD_USE_THREAD_PER_CONNECTION))
+    {
+      /* do not have a thread per connection, process all connections now */
+      next = daemon->connections_head;
+      while (NULL != (pos = next))
+        {
+	  next = pos->next;
+          ds = pos->socket_fd;
+          if (ds != -1)
+            {
+              if ( (FD_ISSET (ds, read_fd_set))
+#if HTTPS_SUPPORT
+		   || (MHD_YES == pos->tls_read_ready) 
+#endif
+		   )
+                pos->read_handler (pos);
+              if (FD_ISSET (ds, write_fd_set))
+                pos->write_handler (pos);
+	      pos->idle_handler (pos);
+            }
+        }
+    }
+  return MHD_YES;
+}
+
+
+/**
+ * Main internal select call.  Will compute select sets, call 'select'
+ * and then MHD_run_from_select with the result.
  *
  * @param daemon daemon to run select loop for
  * @param may_block YES if blocking, NO if non-blocking
@@ -1339,8 +1407,6 @@ static int
 MHD_select (struct MHD_Daemon *daemon, 
 	    int may_block)
 {
-  struct MHD_Connection *pos;
-  struct MHD_Connection *next;
   int num_ready;
   fd_set rs;
   fd_set ws;
@@ -1349,7 +1415,6 @@ MHD_select (struct MHD_Daemon *daemon,
   struct timeval timeout;
   struct timeval *tv;
   MHD_UNSIGNED_LONG_LONG ltimeout;
-  int ds;
 
   timeout.tv_sec = 0;
   timeout.tv_usec = 0;
@@ -1403,8 +1468,9 @@ MHD_select (struct MHD_Daemon *daemon,
       timeout.tv_sec = ltimeout / 1000;
       tv = &timeout;
     }
+  if (-1 == max)
+    return MHD_YES;
   num_ready = SELECT (max + 1, &rs, &ws, &es, tv);
-
   if (MHD_YES == daemon->shutdown)
     return MHD_NO;
   if (num_ready < 0)
@@ -1416,33 +1482,7 @@ MHD_select (struct MHD_Daemon *daemon,
 #endif
       return MHD_NO;
     }
-  /* select connection thread handling type */
-  if ( (-1 != (ds = daemon->socket_fd)) &&
-       (FD_ISSET (ds, &rs)) )
-    MHD_accept_connection (daemon);
-  if (0 == (daemon->options & MHD_USE_THREAD_PER_CONNECTION))
-    {
-      /* do not have a thread per connection, process all connections now */
-      next = daemon->connections_head;
-      while (NULL != (pos = next))
-        {
-	  next = pos->next;
-          ds = pos->socket_fd;
-          if (ds != -1)
-            {
-              if ( (FD_ISSET (ds, &rs))
-#if HTTPS_SUPPORT
-		   || (MHD_YES == pos->tls_read_ready) 
-#endif
-		   )
-                pos->read_handler (pos);
-              if (FD_ISSET (ds, &ws))
-                pos->write_handler (pos);
-	      pos->idle_handler (pos);
-            }
-        }
-    }
-  return MHD_YES;
+  return MHD_run_from_select (daemon, &rs, &ws, &es);
 }
 
 
@@ -1517,6 +1557,8 @@ MHD_poll_all (struct MHD_Daemon *daemon,
 	  p[poll_server+i].events |= POLLOUT;
 	i++;
       }
+    if (0 == poll_server + num_connections)
+      return MHD_YES;
     if (poll (p, poll_server + num_connections, timeout) < 0) 
       {
 	if (EINTR == errno)
@@ -1597,6 +1639,8 @@ MHD_poll_listen_socket (struct MHD_Daemon *daemon,
     timeout = 0;
   else
     timeout = -1;
+  if (0 == poll_count)
+    return MHD_YES;
   if (poll (p, poll_count, timeout) < 0)
     {
       if (EINTR == errno)
@@ -1646,6 +1690,10 @@ MHD_poll (struct MHD_Daemon *daemon,
  * in client callbacks).  This method should be called
  * by clients in combination with MHD_get_fdset
  * if the client-controlled select method is used.
+ *
+ * This function will work for external 'poll' and 'select' mode.
+ * However, if using external 'select' mode, you may want to
+ * instead use 'MHD_run_from_select', as it is more efficient.
  *
  * @return MHD_YES on success, MHD_NO if this
  *         daemon was not started with the right
@@ -1716,6 +1764,34 @@ MHD_start_daemon (unsigned int options,
   daemon = MHD_start_daemon_va (options, port, apc, apc_cls, dh, dh_cls, ap);
   va_end (ap);
   return daemon;
+}
+
+
+/**
+ * Stop accepting connections from the listening socket.  Allows
+ * clients to continue processing, but stops accepting new
+ * connections.  Note that the caller is responsible for closing the
+ * returned socket; however, if MHD is run using threads (anything but
+ * external select mode), it must not be closed until AFTER
+ * "MHD_stop_daemon" has been called (as it is theoretically possible
+ * that an existing thread is still using it).
+ *
+ * @param daemon daemon to stop accepting new connections for
+ * @return old listen socket on success, -1 if the daemon was 
+ *         already not listening anymore
+ */
+int
+MHD_quiesce_daemon (struct MHD_Daemon *daemon)
+{
+  unsigned int i;
+  int ret;
+
+  ret = daemon->socket_fd;
+  if (NULL != daemon->worker_pool)
+    for (i = 0; i < daemon->worker_pool_size; i++)        
+      daemon->worker_pool[i].socket_fd = -1;    
+  daemon->socket_fd = -1;
+  return ret;
 }
 
 
@@ -2536,6 +2612,16 @@ MHD_start_daemon_va (unsigned int options,
           if (i < leftover_conns)
             ++d->max_connections;
 
+          /* Must init cleanup connection mutex for each worker */
+          if (0 != pthread_mutex_init (&d->cleanup_connection_mutex, NULL))
+            {
+#if HAVE_MESSAGES
+              MHD_DLOG (daemon,
+                       "MHD failed to initialize cleanup connection mutex for thread worker %d\n", i);
+#endif
+              goto thread_failed;
+            }
+
           /* Spawn the worker thread */
           if (0 != (res_thread_create = create_thread (&d->pid, daemon, &MHD_select_thread, d)))
             {
@@ -2546,6 +2632,7 @@ MHD_start_daemon_va (unsigned int options,
 #endif
               /* Free memory for this worker; cleanup below handles
                * all previously-created workers. */
+              pthread_mutex_destroy (&d->cleanup_connection_mutex);
               goto thread_failed;
             }
         }
@@ -2615,7 +2702,7 @@ close_all_connections (struct MHD_Daemon *daemon)
   for (pos = daemon->connections_head; NULL != pos; pos = pos->next)    
     SHUTDOWN (pos->socket_fd, 
 	      (pos->read_closed == MHD_YES) ? SHUT_WR : SHUT_RDWR);    
-  if (0 != pthread_mutex_unlock(&daemon->cleanup_connection_mutex))
+  if (0 != pthread_mutex_unlock (&daemon->cleanup_connection_mutex))
     {
       MHD_PANIC ("Failed to release cleanup mutex\n");
     }
@@ -2685,8 +2772,9 @@ MHD_stop_daemon (struct MHD_Daemon *daemon)
 #ifdef HAVE_LISTEN_SHUTDOWN
   else
     {
-      /* fd must not be -1 here, otherwise we'd have used the wpipe */
-      SHUTDOWN (fd, SHUT_RDWR);
+      /* fd might be -1 here due to 'MHD_quiesce_daemon' */
+      if (-1 != fd)
+	(void) SHUTDOWN (fd, SHUT_RDWR);
     }
 #endif
 #if DEBUG_CLOSE
@@ -2707,6 +2795,7 @@ MHD_stop_daemon (struct MHD_Daemon *daemon)
 	      MHD_PANIC ("Failed to join a thread\n");
 	    }
 	  close_all_connections (&daemon->worker_pool[i]);
+	  pthread_mutex_destroy (&daemon->worker_pool[i].cleanup_connection_mutex);
 	}
       free (daemon->worker_pool);
     }
@@ -2725,7 +2814,7 @@ MHD_stop_daemon (struct MHD_Daemon *daemon)
     }
   close_all_connections (daemon);
   if (-1 != fd)
-    CLOSE (fd);
+    (void) CLOSE (fd);
 
   /* TLS clean up */
 #if HTTPS_SUPPORT
@@ -2746,10 +2835,9 @@ MHD_stop_daemon (struct MHD_Daemon *daemon)
 
   if (-1 != daemon->wpipe[1])
     {
-      CLOSE (daemon->wpipe[0]);
-      CLOSE (daemon->wpipe[1]);
+      (void) CLOSE (daemon->wpipe[0]);
+      (void) CLOSE (daemon->wpipe[1]);
     }
-
   free (daemon);
 }
 

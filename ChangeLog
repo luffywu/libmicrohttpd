@@ -1,3 +1,46 @@
+Thu Apr 25 13:08:10 CEST 2013
+	Added 'MHD_quiesce_daemon' to allow application to stop
+	processing new incoming connections while finishing
+	ongoing requests. -CG
+
+Sun Mar 31 23:17:13 CEST 2013
+	Added MHD demonstration code 'src/examples/demo.c'. -CG
+
+Sun Mar 31 20:27:48 CEST 2013
+	Adding new API call 'MHD_run_from_select' to allow programs
+	running in 'external select mode' to reduce the number of
+	'select' calls by a factor of two. -CG
+
+Sun Mar 31 20:03:48 CEST 2013
+	Performance improvements, updated documentation.
+	Make better use of available memory pool memory for
+	reading (especially important for large POST uploads);
+	improve post processor speed by internally adjusting the
+	buffer size by 4 bytes to ensure "round" IO sizes given
+	a "round" post processor buffer size argument.  Note
+	that applications that previously added 4 bytes to the
+	post processor buffer size might now perform worse.
+	Using the new 'demo' example, POST upload speed
+	increased from ~90 MB/s to ~120 MB/s for a large file
+	(note that the improvement comes from better aligned
+	disk IO; without disk IO, the speed was (and remains)
+	at ~1500 MB/s on this system). -CG
+
+Fri Mar 29 16:44:29 CET 2013
+	Renaming testcases to consistenly begin with test_;
+	Changing build system to build examples in doc/.
+	Releasing libmicrohttpd 0.9.26. -CG
+
+Thu Mar  7 10:13:08 CET 2013
+	Fix bug in postprocessor URL parser (#2818). -jgresula
+
+Mon Mar  4 13:45:35 CET 2013
+	Fix dropping of SSL connections if uptime is less than
+        MHD_OPTION_CONNECTION_TIMEOUT due to integer underflow (#2802). -greed
+
+Fri Mar  1 01:11:57 CET 2013
+	Fully initialize cleanup mutex struct for each thread (#2803). -Ulion
+
 Wed Feb  6 01:51:52 CET 2013
 	Releasing libmicrohttpd 0.9.25. -CG
 

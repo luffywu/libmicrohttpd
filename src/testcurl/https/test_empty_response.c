@@ -1,62 +1,42 @@
-
 /*
-     This file is part of libmicrohttpd
-     (C) 2007 Christian Grothoff
+ This file is part of libmicrohttpd
+ (C) 2013 Christian Grothoff
 
-     libmicrohttpd is free software; you can redistribute it and/or modify
-     it under the terms of the GNU General Public License as published
-     by the Free Software Foundation; either version 2, or (at your
-     option) any later version.
+ libmicrohttpd is free software; you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published
+ by the Free Software Foundation; either version 3, or (at your
+ option) any later version.
 
-     libmicrohttpd is distributed in the hope that it will be useful, but
-     WITHOUT ANY WARRANTY; without even the implied warranty of
-     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-     General Public License for more details.
+ libmicrohttpd is distributed in the hope that it will be useful, but
+ WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ General Public License for more details.
 
-     You should have received a copy of the GNU General Public License
-     along with libmicrohttpd; see the file COPYING.  If not, write to the
-     Free Software Foundation, Inc., 59 Temple Place - Suite 330,
-     Boston, MA 02111-1307, USA.
-*/
-
-/**
- * @file daemontest_process_arguments.c
- * @brief  Testcase for HTTP URI arguments
- * @author Christian Grothoff
+ You should have received a copy of the GNU General Public License
+ along with libmicrohttpd; see the file COPYING.  If not, write to the
+ Free Software Foundation, Inc., 59 Temple Place - Suite 330,
+ Boston, MA 02111-1307, USA.
  */
 
-#include "MHD_config.h"
+/**
+ * @file test_empty_response.c
+ * @brief  Testcase for libmicrohttpd HTTPS GET operations with emtpy reply
+ * @author Christian Grothoff
+ */
 #include "platform.h"
+#include "microhttpd.h"
+#include <limits.h>
+#include <sys/stat.h>
 #include <curl/curl.h>
-#include <microhttpd.h>
-#include <stdlib.h>
-#include <string.h>
-#include <time.h>
+#include <gcrypt.h>
+#include "tls_test_common.h"
 
-#ifndef WINDOWS
-#include <unistd.h>
-#endif
+extern const char srv_key_pem[];
+extern const char srv_self_signed_cert_pem[];
+extern const char srv_signed_cert_pem[];
+extern const char srv_signed_key_pem[];
 
 static int oneone;
-
-struct CBC
-{
-  char *buf;
-  size_t pos;
-  size_t size;
-};
-
-static size_t
-copyBuffer (void *ptr, size_t size, size_t nmemb, void *ctx)
-{
-  struct CBC *cbc = ctx;
-
-  if (cbc->pos + size * nmemb > cbc->size)
-    return 0;                   /* overflow */
-  memcpy (&cbc->buf[cbc->pos], ptr, size * nmemb);
-  cbc->pos += size * nmemb;
-  return size * nmemb;
-}
 
 static int
 ahc_echo (void *cls,
@@ -67,39 +47,19 @@ ahc_echo (void *cls,
           const char *upload_data, size_t *upload_data_size,
           void **unused)
 {
-  static int ptr;
-  const char *me = cls;
   struct MHD_Response *response;
   int ret;
-  const char *hdr;
 
-  if (0 != strcmp (me, method))
-    return MHD_NO;              /* unexpected method */
-  if (&ptr != *unused)
-    {
-      *unused = &ptr;
-      return MHD_YES;
-    }
-  *unused = NULL;
-  hdr = MHD_lookup_connection_value (connection, MHD_GET_ARGUMENT_KIND, "k");
-  if ((hdr == NULL) || (0 != strcmp (hdr, "v x")))
-    abort ();
-  hdr = MHD_lookup_connection_value (connection,
-                                     MHD_GET_ARGUMENT_KIND, "hash");
-  if ((hdr == NULL) || (0 != strcmp (hdr, "#")))
-    abort ();
-  response = MHD_create_response_from_buffer (strlen (url),
-					      (void *) url, 
-					      MHD_RESPMEM_MUST_COPY);
+  response = MHD_create_response_from_buffer (0, NULL,
+					      MHD_RESPMEM_PERSISTENT);
   ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
   MHD_destroy_response (response);
-  if (ret == MHD_NO)
-    abort ();
   return ret;
 }
 
+
 static int
-testExternalGet ()
+testInternalSelectGet ()
 {
   struct MHD_Daemon *d;
   CURL *c;
@@ -120,15 +80,29 @@ testExternalGet ()
   cbc.buf = buf;
   cbc.size = 2048;
   cbc.pos = 0;
-  d = MHD_start_daemon (MHD_USE_DEBUG,
-                        21080, NULL, NULL, &ahc_echo, "GET", MHD_OPTION_END);
+  d = MHD_start_daemon (MHD_USE_DEBUG | MHD_USE_SSL | MHD_USE_SELECT_INTERNALLY,
+                        1082, NULL, NULL, &ahc_echo, "GET", 
+                        MHD_OPTION_HTTPS_MEM_KEY, srv_key_pem,
+                        MHD_OPTION_HTTPS_MEM_CERT, srv_self_signed_cert_pem,
+			MHD_OPTION_END);
   if (d == NULL)
     return 256;
+
+  char *aes256_sha = "AES256-SHA";
+  if (curl_uses_nss_ssl() == 0)
+    {
+      aes256_sha = "rsa_aes_256_sha";
+    }
+
   c = curl_easy_init ();
-  curl_easy_setopt (c, CURLOPT_URL,
-                    "http://127.0.0.1:21080/hello_world?k=v+x&hash=%23");
+  curl_easy_setopt (c, CURLOPT_URL, "https://127.0.0.1:1082/hello_world");
   curl_easy_setopt (c, CURLOPT_WRITEFUNCTION, &copyBuffer);
   curl_easy_setopt (c, CURLOPT_WRITEDATA, &cbc);
+  /* TLS options */
+  curl_easy_setopt (c, CURLOPT_SSLVERSION, CURL_SSLVERSION_SSLv3);
+  curl_easy_setopt (c, CURLOPT_SSL_CIPHER_LIST, aes256_sha);
+  curl_easy_setopt (c, CURLOPT_SSL_VERIFYPEER, 0);
+  curl_easy_setopt (c, CURLOPT_SSL_VERIFYHOST, 0);
   curl_easy_setopt (c, CURLOPT_FAILONERROR, 1);
   if (oneone)
     curl_easy_setopt (c, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
@@ -164,7 +138,6 @@ testExternalGet ()
       FD_ZERO (&rs);
       FD_ZERO (&ws);
       FD_ZERO (&es);
-      curl_multi_perform (multi, &running);
       mret = curl_multi_fdset (multi, &rs, &ws, &es, &max);
       if (mret != CURLM_OK)
         {
@@ -173,14 +146,6 @@ testExternalGet ()
           curl_easy_cleanup (c);
           MHD_stop_daemon (d);
           return 2048;
-        }
-      if (MHD_YES != MHD_get_fdset (d, &rs, &ws, &es, &max))
-        {
-          curl_multi_remove_handle (multi, c);
-          curl_multi_cleanup (multi);
-          curl_easy_cleanup (c);
-          MHD_stop_daemon (d);
-          return 4096;
         }
       tv.tv_sec = 0;
       tv.tv_usec = 1000;
@@ -205,7 +170,6 @@ testExternalGet ()
               multi = NULL;
             }
         }
-      MHD_run (d);
     }
   if (multi != NULL)
     {
@@ -214,26 +178,28 @@ testExternalGet ()
       curl_multi_cleanup (multi);
     }
   MHD_stop_daemon (d);
-  if (cbc.pos != strlen ("/hello_world"))
+  if (cbc.pos != 0)
     return 8192;
-  if (0 != strncmp ("/hello_world", cbc.buf, strlen ("/hello_world")))
-    return 16384;
   return 0;
 }
 
-
+GCRY_THREAD_OPTION_PTHREAD_IMPL;
 
 int
 main (int argc, char *const *argv)
 {
   unsigned int errorCount = 0;
 
-  oneone = NULL != strstr (argv[0], "11");
-  if (0 != curl_global_init (CURL_GLOBAL_WIN32))
-    return 2;
-  errorCount += testExternalGet ();
-  if (errorCount != 0)
-    fprintf (stderr, "Error (code: %u)\n", errorCount);
+  gcry_control (GCRYCTL_SET_THREAD_CBS, &gcry_threads_pthread);
+  if (!gcry_check_version (GCRYPT_VERSION))
+    abort ();
+  if (0 != curl_global_init (CURL_GLOBAL_ALL))
+    {
+      fprintf (stderr, "Error: %s\n", strerror (errno));
+      return -1;
+    }
+  if (0 != (errorCount = testInternalSelectGet ()))
+    fprintf (stderr, "Fail: %d\n", errorCount);
   curl_global_cleanup ();
-  return errorCount != 0;       /* 0 == pass */
+  return errorCount != 0;
 }
